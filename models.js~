@@ -1,0 +1,24 @@
+var mongoose = require('mongoose');
+/*A simple schema demonstration.*/
+const blogScheme = new mongoose.Schema({
+    title: String,
+    author: String,
+    date: Date,
+    body: String,
+    likes: Number
+})
+
+const Blog = mongoose.model('Blog', blogScheme);
+mongoose.connect('mongodb://localhost:27017/blogDB', {useNewUrlParser: true, useUnifiedTopology: true});
+
+async function run(){
+    var newPost = new Blog({title: "Your first mongoose example", author: "Jake Levy", date: new Date(), body: "This is an example", likes: 0});
+
+    await newPost.save();
+
+    var res = await Blog.find({});
+    console.log(res)
+
+}
+
+run()
