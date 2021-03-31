@@ -33,7 +33,7 @@ async function run(){
     var newPost = new Blog({title: "Your first mongoose example", author: "Jake Levy", date: new Date(), body: "This is an example", likes: 0});
 
     //this saves the instance document to the database collection it belongs to
-    await newPost.save();
+     await newPost.save();
     //this is one of the many Mongoose transaction methods
     var res = await Blog.find({});
     console.log(res)
