@@ -1,20 +1,50 @@
 var tracker = require("tracker");
+var Exercise = require("tracker/Exercise");
 var http = require("http");
 var qString = require("querystring");
-var mongoClient = require("mongodb").MongoClient;
-//this calls the let db={}; and instantiates the db for us
+
 let dbManager = require('./dbManager'); 
-//local mongo instance
-var url = "mongodb://127.0.0.1:27017/"
-const client = new mongoClient(url);
+let mongoose = require('mongoose');
+mongoose.set('bufferCommands', false);
+const exSchema = new mongoose.Schema({
+	type: {
+		type: String,
+		required: true
+}
+});
+exSchema.loadClass(Exercise);
+const actSchema= new mongoose.Schema(
+{
+	activity : {
+		type: exSchema
+	} ,
+	weight: Number,
+	distance: Number,
+	time: {
+		type: Number, 
+		validate: {
+			validator: function(){
+				return (this.time>0)
+			}, 
+			message: "Time must be greater than 0!"
+		},
+		required: [true,'You must enter a time for speed']
+	},
+	user: String
+	
+});
+
+actSchema.loadClass(tracker);
+actSchema.path('activity').required(true, 'You must enter an activity to track');
+actSchema.path('weight').required(true, 'You must enter a weight for calculation');
+actSchema.path('distance').required(true, 'You must enter a distance for everything');
+const actCol=mongoose.model('Activity', actSchema)
 
 
-//This will take a set of properties that are coming in from a "POST"
-//And transform them into a document for inserting into the "activities"
-// collection
+//This has been modified to return a Mongoose Model instance (a document)
 function docifyActivity(params){
-    let doc = { activity: { type: params.activity }, weight: params.weight,
-		distance: params.distance, time: params.time, user: params.user};
+    let doc = new actCol({ activity: { type : params.activity.toString().toLowerCase() }, weight: params.weight,
+		distance: params.distance, time: params.time, user: params.user});
     return doc;
 }
 
@@ -33,7 +63,11 @@ var page = '<html><head><title>The Activity Server</title></head>'+
 '<input type="reset" value="Clear">'+
 '</form>';
     if (calories){
-     page+='<div id="calories"><h3> Calories Burned: ' + calories + '</h3></div>';
+	if (isNaN(calories)){
+	    page+='<div id="calories"><h3> Calories Burned: ' + calories + '</h3></div>';
+	} else{
+	    page+='<div id="calories"><h3> Message: ' + calories + '</h3></div>';
+	}
     }
 page+='<br><br><a href="./search">Search</a></body></html>';
 
@@ -45,7 +79,7 @@ res.end(page);
 async function searchResp(result, response){
 var page = '<html><head><title>The Activity Server</title></head>'+
 '<body> <form method="post">'+
-'<h1>Search for a User\'s activity</h1>'+
+'<h1>Search for an Activity</h1>'+
 'Property <select name="prop">'+
 '<option>user</option>' +
 '<option>activity.type</option>' +
@@ -62,12 +96,14 @@ var page = '<html><head><title>The Activity Server</title></head>'+
 
 	page+=`<h2>Activities for ${result.prop}: ${result[result.prop]}</h2>`
 	let count = 0;
-	//the await must be wrapped in a try/catch in case the promise rejects
+//mongoose returns an actual value from the await
 	try{
-	await result.data.forEach((item) =>{
-		let curAct = new tracker(item.activity.type, item.weight, item.distance, item.time);
-		page+=`Activity ${++count} ${item.user}: ${item.activity.type}, Distance: ${item.distance} | ${curAct.calculate()} Calories Burned <br>` ;
-	    });
+		for (item in result.data){
+			
+			let curAct = new tracker(result.data[item].activity.type, result.data[item].weight, result.data[item].distance, result.data[item].time);
+			page+=`Activity ${++count} ${result.data[item].user}: ${result.data[item].activity.type}, Distance: ${result.data[item].distance} | ${curAct.calculate()} Calories Burned <br>`
+		}
+
 	} catch (e){
 	    page+=e.message;
 	}
@@ -97,39 +133,35 @@ async  (req, res)=>{
 		let proceed = true;
 		var postParams = qString.parse(postData);
 		//handle empty data
-		for (property in postParams){
-		    if (postParams[property].toString().trim() == ''){
-			calories = "Error! All Fields must have Data";
-			proceed = false;
-		    }
-		}
+			//This has been offloaded to Mongoose
 		if (proceed){
-		    let col = dbManager.get().collection("activities");
+//		    let col = dbManager.get().collection("activities");
 		    //on the insert page
 		    if (urlOBJ.pathname=="/insert"){
 			
 			try{
-			    //if the data is bad, object creation throws an 
-			    //error (as we have seen since Week 4).
-			    //And no document will be inserted
-			    var curTracker = new tracker(postParams.activity,
-							 postParams.weight,
-							 postParams.distance,
-							 postParams.time);
-			    calories = currentTracker.calculate();
-			  			 
-			    //convert params to a document for Mongo
+			    //convert params to a document for Mongoose
+			    //This will allow us to offload the validations to mongoose
 			    let curDoc = docifyActivity(postParams);
 
+			    var curTracker = new tracker(postParams.activity,
+							postParams.weight,
+							postParams.distance,
+							postParams.time);
+
 			    //insert the document into the db
-			    let result = await col.insertOne(curDoc);
+			    await curDoc.save() 
+				
+				
 			    //return calories as response (Success)
+				   calories = curTracker.calculate();
+		
 			    servResp(calories, res);
-			    console.log(result); //log result for viewing
+			   // console.log(result); //log result for viewing
 			} catch (err){  
 			    calories = "ERROR! Please enter appropriate data";
 			    console.log(err.message);
-			    servResp(calories, res);
+			    servResp(err.message, res);
 			} 
 		    } else if (urlOBJ.pathname == "/search") {
 			var prop= postParams.prop;
@@ -137,23 +169,23 @@ async  (req, res)=>{
 			if (prop != "user" && prop != "activity.type"){
 			    val = Number(postParams.value);
 			} 
-			//simple equality search
+			//simple equality search. using [] allows a variable
+			//in the property name 
 			let searchDoc = { [prop] : val };
 			try{
-			    let cursor = col.find(searchDoc,  {
-				    projection: { _id:0 , activity: 1, distance: 1, user: 1, time: 1, weight: 1}});
+			    let cursor = await actCol.find(searchDoc,  'activity distance user weight time').exec();
 			    let resultOBJ={data: cursor, [prop]  : val, prop: prop};
 
 			    searchResp(resultOBJ, res);//call the searchPage
 			} catch (e){
 			    console.log(e.message);
 			    res.writeHead(404);
-			    res.write("<h1> ERROR 404. Page NOT FOUND</h1>");
-			    res.end("<br><br>" + e.message + "<br>");
+		res.write("<html><body><h1> ERROR 404. Page NOT FOUND</h1>");
+			    res.end("<br>" + e.message + "<br></body></html>");
 			}
 		    } else {
 			res.writeHead(404);
-			res.end("<h1> ERROR 404. Page NOT FOUND</h1><br>");
+		res.end("<html><body><h1> ERROR 404. Page NOT FOUND</h1><br>");
 		    }
 		} else {
 		    if (urlOBJ.pathname == "/insert"){
@@ -173,7 +205,9 @@ async  (req, res)=>{
 	}else if (urlOBJ.pathname == "/search"){
 	    //Initial GET to search returns a blank page
 	    searchResp(null, res);
-	} else {
+	} else if (urlOBJ.pathname == "/"){
+	    res.end('<html><body><br><br><a href="/insert">home/insert</a>&emsp;&emsp;<a href="/search">search Page</a></body></html>');
+	}else {
 	    res.writeHead(404);
 	    res.end("<h1> ERROR 404. Page NOT FOUND</h1><br><br>");
 	}
@@ -182,13 +216,15 @@ async  (req, res)=>{
 	console.log("Closing DB Connection");
 	await dbManager.close();
     }).listen(3000, async ()=> {
-	    //start the DB connection
+	    //start and wait for the DB connection
 	    try{
-		await dbManager.get("practiceDB");
+		//await dbManager.get("practiceDB");
+		await mongoose.connect('mongodb://localhost:27017/practiceDB', {useNewUrlParser: true, useUnifiedTopology: true })
 	    } catch (e){
 		console.log(e.message);
 	    }
 	    
 	    console.log("Server is running...");
+	
 	});
 
