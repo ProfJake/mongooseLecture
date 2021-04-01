@@ -33,11 +33,31 @@ async function run(){
     var newPost = new Blog({title: "Your first mongoose example", author: "Jake Levy", date: new Date(), body: "This is an example", likes: 0});
 
     //this saves the instance document to the database collection it belongs to
-     await newPost.save();
+    await newPost.save();
+    //We await for queries in the same we await for promises
+    //the difference is subtle (*see the slides)
+        
     //this is one of the many Mongoose transaction methods
     var res = await Blog.find({});
+    //returns an array of Blog documents
+    //accepts doc like the MongoDB api queries
+    
     console.log(res)
 
 }
 
-run()
+
+run().then(
+    ()=>{
+//When given one argument, path returns the SchemaType for the named property
+	//prints the SchemaType Configuration Object
+	console.log(blogScheme.path('likes'))
+
+	//prints undefined because this path does not exist
+	console.log(blogScheme.path('dislikes'))
+	
+//When given two arguments it will set the Schema path
+	blogScheme.path('views', Number)
+
+	console.log(blogScheme.path('views'))
+    })
